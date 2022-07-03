@@ -6,14 +6,12 @@ from pathlib import Path
 from glob import glob
 from PIL import Image
 import re
-from prefetch_generator import BackgroundGenerator, background
-
 
 parser = argparse.ArgumentParser(description='Video frame replacer for video super resolution tasks')
 parser.add_argument('-i', '--input', help='Path to the original video file, \
     whose video stream will be replaced by -r and other streams copied to output.')
-parser.add_argument('-r', '--replacement', help='Glob pattern to replacement video frames. Frames will be sorted numerically. \
-    Should yield the same amount of frames in the input video file.')
+parser.add_argument('-r', '--replacement', help='FFmpeg input pattern to replacement video frames. \
+    Should contains the same number of video frames as the input file.')
 parser.add_argument('-o', '--output', help='Path to output file.')
 parser.add_argument('-y', '--yes', help='Overwrite output if it exists.', default=False, action='store_true')
 parser.add_argument('-vs', '--vscale', help='Scale factor to apply on the original video', default='1', type=float)
@@ -34,46 +32,9 @@ if Path(args.output).exists() and not args.yes:
     print(f"Output exists. Specify `-y` or `--yes` to overwrite it.", file=sys.stderr)
     sys.exit(1)
 
-# Parse replacement frame descrpiton.
-# TODO: Implement rawvideo stream replacement
-# TODO: Parallelize image load.
-replacement_gen = None
-num_replacements = 0
-if '*' in args.replacement:
-    # Only support * glob to disambiguate.
-    replacements = glob(args.replacement)
-    if len(replacements) == 0:
-        print(f"0 replacement frames found with glob pattern `{args.replacement}`.", file=sys.stderr)
-        sys.exit(1)
-    re_numerical = r'(\d+)'
-    failed_guesses = []
-    def guess_numerical(s):
-        m = re.search(re_numerical, s)
-        if m:
-            return int(m.group(0))
-        else:
-            failed_guesses.append(s)
-            return 0
-    replacements = list(sorted(replacements, key=guess_numerical))
-    num_replacements = len(replacements)
-    if num_replacements > 0:
-        print(f"Warning: frame ordering can't be determined for some inputs: {failed_guesses[:3]}.", file=sys.stderr)
-
-    def glob_gen():
-        for p in replacements:
-            yield Image.open(p)
-
-    replacement_gen = BackgroundGenerator(glob_gen(), max_prefetch=8)
-
-elif args.replacement == '-':
-    print(f"Pipe replacement not implemented", file=sys.stderr)
-    sys.exit(2)
-else:
-    print(f"Unsupported replacement method", file=sys.stderr)
-
-
 # Probe input
 ivs = in_container.streams.video[0]
+ivs.thread_type = 'AUTO'
 ivcc = ivs.codec_context
 total_frames = ivs.frames if ivs.frames is not None else 0
 print(f'input video:')
@@ -84,10 +45,6 @@ print(f'  frames: {total_frames if total_frames > 0 else "Unknown"}')
 print(f'  width: {ivcc.width}')
 print(f'  width: {ivcc.height}')
 print('')
-
-# Check the number of replacement frames and input frames match if both known
-if total_frames > 0 and num_replacements > 0 and total_frames != num_replacements:
-    print(f"Warning: number of replacements doesn't match: frames = {total_frames}, replacements = {num_replacements}")
 
 # Create output file and initializes output streams.
 out_container = av.open(args.output, 'w')
@@ -111,19 +68,29 @@ for s in in_container.streams.get():
 ovreformatter = av.video.reformatter.VideoReformatter()
 n_frame = 1
 
-@background(max_prefetch=8)
-def oframe_generator(replacement_gen):
-    for rimage in replacement_gen:
-        oframe = av.VideoFrame.from_image(rimage)
-        oframe = ovreformatter.reformat(
-            oframe,
-            format=ovs.pix_fmt,
-            width=ovs.width, height=ovs.height,
-            interpolation='LANCZOS'
-        )
-        yield oframe
+# Parse replacement frame descrpiton.
+# TODO: Implement rawvideo stream replacement
+def generate_replacement_frames():
+    replacement_container = av.open(args.replacement)
+    rvs = replacement_container.streams.video[0]
+    rvs.thread_type = 'AUTO'
 
-oframe_gen = oframe_generator(replacement_gen)
+    # Filter to load replacements into desired output size (width, height)
+    graph = av.filter.Graph()
+    f_inp_buf = graph.add_buffer(template=rvs)
+    f_scale = graph.add("scale", f'{ovs.height}:{ovs.width}:lanczos')
+    f_pix_fmt = graph.add("format", f'pix_fmts={ovs.pix_fmt}')
+    f_sink = graph.add('buffersink')
+    f_inp_buf.link_to(f_scale)
+    f_scale.link_to(f_pix_fmt)
+    f_pix_fmt.link_to(f_sink)
+    graph.configure()
+
+    for frame in replacement_container.decode(video=0):
+        f_inp_buf.push(frame)
+        yield f_sink.pull()
+
+replacement_gen = generate_replacement_frames()
 
 pbar = tqdm(total = total_frames)
 for packet in in_container.demux():
@@ -134,7 +101,7 @@ for packet in in_container.demux():
     if packet.stream.type == 'video':
         for iframe in packet.decode():
             try:
-                oframe = next(oframe_gen)
+                oframe = next(replacement_gen)
                 oframe.pts = iframe.pts
             except Exception as e:
                 print(f"Run out of replacement frames at frame_index {n_frame}.", file=sys.stderr)
