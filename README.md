@@ -1,6 +1,14 @@
-## Dependencies
+VFR
+===
+Video frame replacer
 
-`no-binary` to trrigger local build which enables nvenc.
+# Description
+Replaced video frames with replacements (e.g. super-resolution frames) while keeping original timestamps in variable frame rate videos.
+
+# Usage
 ```
-pip3 install av --no-binary av
+python3 frame_replace.py -i original.mp4 -r super_resolution/%08d.png -o out.mp4 --vscale 2
 ```
+
+# LICENSE
+GPL-3.0

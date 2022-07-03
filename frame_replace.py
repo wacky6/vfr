@@ -4,16 +4,15 @@ from tqdm import tqdm
 import argparse
 from pathlib import Path
 from glob import glob
-from PIL import Image
 from codec_options import pick_best_codec
 import re
 
 parser = argparse.ArgumentParser(description='Video frame replacer for video super resolution tasks')
-parser.add_argument('-i', '--input', help='Path to the original video file, \
+parser.add_argument('-i', '--input', required=True, help='Path to the original video file, \
     whose video stream will be replaced by -r and other streams copied to output.')
-parser.add_argument('-r', '--replacement', help='FFmpeg input pattern to replacement video frames. \
+parser.add_argument('-r', '--replacement', required=True, help='FFmpeg input pattern to replacement video frames. \
     Should contains the same number of video frames as the input file.')
-parser.add_argument('-o', '--output', help='Path to output file.')
+parser.add_argument('-o', '--output', required=True, help='Path to output file.')
 parser.add_argument('-y', '--yes', help='Overwrite output if it exists.', default=False, action='store_true')
 parser.add_argument('-vs', '--vscale', help='Scale factor to apply on the original video', default='1', type=float)
 parser.add_argument('-vpix_fmt', '--vpix_fmt', help='Output pixel format', default='yuv420p')

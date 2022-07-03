@@ -1,0 +1,4 @@
+av --no-binary av    # Use local ffmpeg for nvenc
+tqdm
+argparse
+glob
