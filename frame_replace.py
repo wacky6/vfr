@@ -5,6 +5,7 @@ import argparse
 from pathlib import Path
 from glob import glob
 from PIL import Image
+from codec_options import pick_best_codec
 import re
 
 parser = argparse.ArgumentParser(description='Video frame replacer for video super resolution tasks')
@@ -43,7 +44,7 @@ print(f'  time_base: {ivs.time_base}')
 print(f'  base_rate: {ivs.base_rate}')
 print(f'  frames: {total_frames if total_frames > 0 else "Unknown"}')
 print(f'  width: {ivcc.width}')
-print(f'  width: {ivcc.height}')
+print(f'  height: {ivcc.height}')
 print('')
 
 # Create output file and initializes output streams.
@@ -52,10 +53,13 @@ ostreams = []
 ovs = None
 for s in in_container.streams.get():
     if s.type == 'video':
+        out_width = int(ivcc.width * args.vscale)
+        out_height = int(ivcc.height * args.vscale)
         # Video stream is modified (e.g. upscaled)
-        ovs = out_container.add_stream('hevc_nvenc', None)
-        ovs.width = int(ivcc.width * args.vscale)
-        ovs.height = int(ivcc.height * args.vscale)
+        name, opts = pick_best_codec(out_width, out_height, args.vpix_fmt)
+        ovs = out_container.add_stream(name, options=opts)
+        ovs.width = out_width
+        ovs.height = out_height
         ovs.time_base = ivs.time_base
         ovs.pix_fmt = args.vpix_fmt
 
@@ -103,6 +107,7 @@ for packet in in_container.demux():
             try:
                 oframe = next(replacement_gen)
                 oframe.pts = iframe.pts
+                oframe.time_base = iframe.time_base
             except Exception as e:
                 print(f"Run out of replacement frames at frame_index {n_frame}.", file=sys.stderr)
                 print(e, file=sys.stderr)
