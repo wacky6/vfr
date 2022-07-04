@@ -97,10 +97,6 @@ replacement_gen = generate_replacement_frames()
 
 pbar = tqdm(total = total_frames)
 for packet in in_container.demux():
-    if packet.dts is None:
-        # Skip flushing packets.
-        continue
-
     if packet.stream.type == 'video':
         for iframe in packet.decode():
             try:
@@ -112,15 +108,22 @@ for packet in in_container.demux():
                 print(e, file=sys.stderr)
                 sys.exit(2)
 
-            for packet in ovs.encode(oframe):
-                out_container.mux(packet)
+            out_container.mux(ovs.encode(oframe))
 
             n_frame += 1
             pbar.update()
     else:
+        if packet.dts == None:
+            # Skip flush packets.
+            continue
+
         # Non-video stream is copied to output
         packet.stream = ostreams[packet.stream.index]
         out_container.mux(packet)
+
+# Flush the video encoder.
+# Non-video streams doesn't need this because the original packets are copied.
+out_container.mux(ovs.encode())
 
 in_container.close()
 out_container.close()
